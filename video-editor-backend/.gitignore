@@ -1,0 +1,29 @@
+# Node & Dependencies
+node_modules/
+
+# Build & Compiled Code
+dist/
+build/
+
+# Environment Variables (Secrets)
+.env
+.env.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Video Processing (CRITICAL for this project)
+# כאן נשמור סרטונים שעולים מהמשתמש או נוצרים על ידי השרת
+uploads/
+outputs/
+temp/
+*.mp4
+*.mov
+*.avi
+
+# Editor & OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
