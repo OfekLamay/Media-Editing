@@ -11,6 +11,10 @@ const actionLabels: Record<ActionType, string> = {
   'improve': '✨ Improve Quality'
 };
 
+const API_BASE_URL = import.meta.env.DEV 
+  ? 'http://localhost:3003' 
+  : 'https://media-editing-api.onrender.com';
+
 function App() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   // רשימת הקבצים בסדר שהמשתמש קבע
@@ -84,7 +88,7 @@ const handleDrop = (index: number, type: 'actions' | 'files') => {
   const handleUpload = async () => {
     setIsLoading(true);
     setError(null);
-    const evtSource = new EventSource('http://localhost:3003/api/video/progress');
+    const evtSource = new EventSource(`${API_BASE_URL}/api/video/progress`);
     evtSource.onmessage = (e) => setProgressMsg(e.data);
 
     const formData = new FormData();
@@ -93,7 +97,7 @@ const handleDrop = (index: number, type: 'actions' | 'files') => {
     formData.append('actions', JSON.stringify(actions));
 
     try {
-      const response = await fetch(`http://localhost:3003/api/video/pipeline`, {
+      const response = await fetch(`${API_BASE_URL}/api/video/pipeline`, {
         method: 'POST',
         body: formData,
       });
