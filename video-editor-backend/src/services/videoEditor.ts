@@ -1,5 +1,6 @@
 import ffmpeg from 'fluent-ffmpeg';
 import path from 'path';
+import { stderr } from 'process';
 
 export const createBoomerang = (inputPath: string, outputPath: string): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -81,30 +82,40 @@ export const reverseVideo = (inputPath: string, outputPath: string): Promise<str
     });
 };
 
+// פונקציה לחיבור מספר סרטונים יחד (עם נרמול רזולוציה אוטומטי)
 export const concatVideos = (inputPaths: string[], outputPath: string): Promise<string> => {
     return new Promise((resolve, reject) => {
-        console.log(`🔗 Concatenating ${inputPaths.length} videos...`);
+        console.log(`🔗 Concatenating ${inputPaths.length} videos with resolution normalization...`);
 
         const command = ffmpeg();
-
+        
+        // 1. הוספת כל הקבצים כ-inputs
         inputPaths.forEach(path => {
             command.addInput(path);
         });
 
-        let filterInputs = '';
-        for (let i = 0; i < inputPaths.length; i++) {
-            filterInputs += `[${i}:v][${i}:a]`;
-        }
+        // 2. בניית שרשור הפילטרים הדינמי
+        const complexFilter: string[] = [];
+        let concatInputs = '';
+
+        inputPaths.forEach((_, i) => {
+            // מנרמלים כל ערוץ וידאו: שינוי גודל ל-1920x1080, הוספת שוליים שחורים אם צריך למניעת עיוות, וקביעת 30FPS
+            complexFilter.push(`[${i}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v${i}]`);
+            // מנרמלים כל ערוץ אודיו: המרה לתדר דגימה אחיד של 48000Hz
+            complexFilter.push(`[${i}:a]aresample=48000[a${i}]`);
+            
+            // אוספים את השמות של הערוצים המנורמלים לקראת החיבור
+            concatInputs += `[v${i}][a${i}]`;
+        });
+
+        // פעולת החיבור עצמה על הערוצים המנורמלים
+        complexFilter.push(`${concatInputs}concat=n=${inputPaths.length}:v=1:a=1[outv][outa]`);
 
         command
-            .complexFilter([
-                `${filterInputs}concat=n=${inputPaths.length}:v=1:a=1[outv][outa]`
-            ])
+            .complexFilter(complexFilter)
             .outputOptions([
                 '-map [outv]',
                 '-map [outa]',
-                '-vsync 1',
-                '-async 1',
                 '-c:v libx264',
                 '-preset fast',
                 '-crf 18',
@@ -117,7 +128,7 @@ export const concatVideos = (inputPaths: string[], outputPath: string): Promise<
                 console.log(`✅ Success! Videos concatenated. Ready for delivery.`);
                 resolve(outputPath);
             })
-            .on('error', (err: Error) => {
+            .on('error', (err: any) => {
                 console.error(`❌ Error concatenating videos:`, err.message);
                 reject(err);
             })

@@ -4,6 +4,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import cors from 'cors';
+import { EventEmitter } from 'events';
 
 import { createBoomerang, removeAudio, reverseVideo, concatVideos, improveQuality } from './services/videoEditor';
 
@@ -13,10 +14,34 @@ const PORT = 3003;
 
 const upload = multer({ dest: 'uploads/' });
 
+const progressEmitter = new EventEmitter();
+
 const outputsDir = path.join(__dirname, '../outputs');
 if (!fs.existsSync(outputsDir)) {
     fs.mkdirSync(outputsDir, { recursive: true });
 }
+
+// --- נתיב חדש: שידור עדכונים בזמן אמת (SSE) ---
+app.get('/api/video/progress', (req: Request, res: Response) => {
+    // הגדרות חובה כדי להשאיר את החיבור פתוח ולהזרים טקסט
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const onProgress = (msg: string) => {
+        // SSE דורש פורמט ספציפי: data: [message] \n\n
+        res.write(`data: ${msg}\n\n`);
+    };
+
+    // מאזינים לאירועי 'update'
+    progressEmitter.on('update', onProgress);
+
+    // כשהלקוח סוגר את החיבור, מנקים את המאזין כדי למנוע דליפת זיכרון
+    req.on('close', () => {
+        progressEmitter.off('update', onProgress);
+    });
+});
 
 app.post('/api/video/boomerang', upload.single('video'), async (req: Request, res: Response): Promise<void> => {
     try {
@@ -177,6 +202,93 @@ app.post('/api/video/improve', upload.single('video'), async (req: Request, res:
     } catch (error) {
         console.error('Error in improving video quality:', error);
         res.status(500).json({ error: 'An error occurred while improving the video on the server.' });
+    }
+});
+
+// --- הראוט המשולב (Pipeline) המעודכן ---
+app.post('/api/video/pipeline', upload.array('videos', 10), async (req: Request, res: Response): Promise<void> => {
+    const tempFilesToCleanup: string[] = [];
+
+    // מילון נתונים קטן לתרגום הפעולות לעברית עבור הודעות ההתקדמות
+    const actionNames: Record<string, string> = {
+        'boomerang': 'מייצר בומרנג 🔄',
+        'reverse': 'הופך את הסרטון ⏪',
+        'remove-audio': 'מסיר את פס הקול 🔇',
+        'improve': 'משפר איכות ורזולוציה ✨'
+    };
+
+    try {
+        const files = req.files as Express.Multer.File[];
+        const actions: string[] = JSON.parse(req.body.actions || '[]');
+
+        if (!files || files.length === 0) {
+            res.status(400).json({ error: 'No video files uploaded.' });
+            return;
+        }
+        if (actions.length === 0) {
+            res.status(400).json({ error: 'No actions selected.' });
+            return;
+        }
+
+        files.forEach(f => tempFilesToCleanup.push(f.path));
+        let currentVideoPath = files[0]!.path;
+
+        progressEmitter.emit('update', 'מתחיל לעבד את הקבצים... ⏳');
+
+        if (actions.includes('concat')) {
+            if (files.length < 2) {
+                res.status(400).json({ error: 'Need at least 2 files to concat.' });
+                return;
+            }
+            
+            progressEmitter.emit('update', 'מחבר את הסרטונים למקשה אחת 🔗...');
+            const nextTempPath = path.join(outputsDir, `temp_concat_${Date.now()}.mp4`);
+            const inputPaths = files.map(f => f.path);
+            await concatVideos(inputPaths, nextTempPath);
+            
+            currentVideoPath = nextTempPath;
+            tempFilesToCleanup.push(nextTempPath);
+            actions.splice(actions.indexOf('concat'), 1);
+        }
+
+        for (const action of actions) {
+            const nextTempPath = path.join(outputsDir, `temp_${action}_${Date.now()}.mp4`);
+            
+            // שידור הודעת ההתקדמות לפני תחילת הפעולה!
+            progressEmitter.emit('update', `${actionNames[action] || action}...`);
+
+            if (action === 'boomerang') await createBoomerang(currentVideoPath, nextTempPath);
+            else if (action === 'reverse') await reverseVideo(currentVideoPath, nextTempPath);
+            else if (action === 'remove-audio') await removeAudio(currentVideoPath, nextTempPath);
+            else if (action === 'improve') await improveQuality(currentVideoPath, nextTempPath);
+
+            currentVideoPath = nextTempPath; 
+            tempFilesToCleanup.push(nextTempPath);
+        }
+
+        progressEmitter.emit('update', 'אורז את הקובץ הסופי להורדה... 📦');
+        const finalFileName = `final_video_${Date.now()}.mp4`;
+        
+        res.download(currentVideoPath, finalFileName, (err) => {
+            if (err) console.error('Error sending file:', err);
+            
+            tempFilesToCleanup.forEach(filePath => {
+                try {
+                    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+                } catch (cleanupErr) {
+                    console.error(`Error deleting temp file ${filePath}:`, cleanupErr);
+                }
+            });
+        });
+
+    } catch (error) {
+        console.error('Error in processing pipeline:', error);
+        progressEmitter.emit('update', '❌ אירעה שגיאה בתהליך.');
+        res.status(500).json({ error: 'An error occurred during the video processing pipeline.' });
+        
+        tempFilesToCleanup.forEach(filePath => {
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        });
     }
 });
 
