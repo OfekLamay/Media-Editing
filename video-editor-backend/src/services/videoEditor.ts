@@ -15,6 +15,7 @@ export const createBoomerang = (inputPath: string, outputPath: string): Promise<
                 '-map [outv]',
                 '-vsync 1',
                 '-async 1',
+                '-threads 1',
                 '-c:v libx264',
                 '-preset fast',
                 '-crf 18'
