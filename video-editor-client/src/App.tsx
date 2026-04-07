@@ -11,6 +11,14 @@ const actionLabels: Record<ActionType, string> = {
   'improve': '✨ Improve Quality'
 };
 
+const MAX_FILE_SIZES_MB: Record<ActionType, number> = {
+  'boomerang': 2,
+  'reverse': 2,
+  'improve': 10,
+  'concat': 15,
+  'remove-audio': 20
+};
+
 const API_BASE_URL = import.meta.env.DEV 
   ? 'http://localhost:3003' 
   : 'https://media-editing-api.onrender.com';
@@ -85,7 +93,36 @@ const handleDrop = (index: number, type: 'actions' | 'files') => {
     setDraggedIndex(null);
   };
 
+  const isConcatActive = actions.includes('concat');
+  const hasOtherActions = actions.length > 0 && !isConcatActive;
+
   const handleUpload = async () => {
+    // --- בדיקת גדלי קבצים והגנה על השרת ---
+    if (isConcatActive) {
+      // בחיבור סרטונים, נסכום את הגודל של כל הקבצים יחד
+      const totalSize = orderedFiles.reduce((sum, file) => sum + file.size, 0);
+      const limitBytes = MAX_FILE_SIZES_MB['concat'] * 1024 * 1024;
+      
+      if (totalSize > limitBytes) {
+        setError(`⚠️ The total size for concatenation exceeds the ${MAX_FILE_SIZES_MB['concat']}MB limit of the free tier. Please select smaller files.`);
+        return;
+      }
+    } else {
+      // בשרשור פעולות (Pipeline), נחפש איזו מהפעולות שנבחרו היא ה"כבדה" ביותר
+      const strictestAction = actions.reduce((prev, curr) => 
+        MAX_FILE_SIZES_MB[curr] < MAX_FILE_SIZES_MB[prev] ? curr : prev
+      );
+      
+      const limitBytes = MAX_FILE_SIZES_MB[strictestAction] * 1024 * 1024;
+      const fileSize = orderedFiles[0].size;
+      const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(1);
+
+      if (fileSize > limitBytes) {
+        setError(`⚠️ In the free tier, the '${actionLabels[strictestAction]}' action is limited to ${MAX_FILE_SIZES_MB[strictestAction]}MB. Your video is ${fileSizeMB}MB.`);
+        return;
+      }
+    }
+    // -------------------------------------
     setIsLoading(true);
     setError(null);
     const evtSource = new EventSource(`${API_BASE_URL}/api/video/progress`);
@@ -115,9 +152,6 @@ const handleDrop = (index: number, type: 'actions' | 'files') => {
       setIsLoading(false);
     }
   };
-
-  const isConcatActive = actions.includes('concat');
-  const hasOtherActions = actions.length > 0 && !isConcatActive;
 
   return (
     <div className="app-container">
