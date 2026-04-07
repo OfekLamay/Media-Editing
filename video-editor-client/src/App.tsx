@@ -1,7 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { fetchFile } from '@ffmpeg/util';
 import './App.css';
 
 type ActionType = 'boomerang' | 'remove-audio' | 'reverse' | 'concat' | 'improve';
+
 
 const actionLabels: Record<ActionType, string> = {
   'boomerang': '🔄 Boomerang',
@@ -32,6 +35,8 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [progressMsg, setProgressMsg] = useState<string>('Processing...');
+  const ffmpegRef = useRef(new FFmpeg());
+
 
   // סנכרון רשימת הקבצים המסודרת בכל פעם שבוחרים קבצים חדשים
   useEffect(() => {
@@ -96,16 +101,72 @@ const handleDrop = (index: number, type: 'actions' | 'files') => {
   const isConcatActive = actions.includes('concat');
   const hasOtherActions = actions.length > 0 && !isConcatActive;
 
+  const processLocally = async () => {
+    if (orderedFiles.length === 0) return; // הגנה: מוודאים שיש קובץ
+    
+    setIsLoading(true);
+    setError(null);
+    const ffmpeg = ffmpegRef.current;
+
+    try {
+      // 1. טעינת המנוע אם הוא טרם נטען
+      if (!ffmpeg.loaded) {
+        setProgressMsg('⬇️ Downloading local engine (approx 25MB)...');
+        await ffmpeg.load();
+      }
+
+      setProgressMsg('🚀 Processing locally in your browser...');
+      
+      // מעקב אחרי התקדמות האחוזים
+      ffmpeg.on('progress', ({ progress }) => {
+        setProgressMsg(`🚀 Processing locally: ${Math.round(progress * 100)}%`);
+      });
+
+      // 2. כתיבת הקובץ המקורי לזיכרון של הדפדפן
+      const file = orderedFiles[0];
+      const inputName = 'input.mp4';
+      const outputName = 'output.mp4';
+      await ffmpeg.writeFile(inputName, await fetchFile(file));
+
+      // 3. הרצת פעולת העריכה (כרגע מדגים בומרנג קלאסי)
+      await ffmpeg.exec([
+        '-i', inputName,
+        '-filter_complex', '[0:v]reverse[r];[0:v][r]concat=n=2:v=1[v]',
+        '-map', '[v]',
+        outputName
+      ]);
+
+      // 4. קריאת התוצאה ושמירה למחשב המשתמש
+      const fileData = await ffmpeg.readFile(outputName);
+      // שימוש ב-any "משתיק" את התלונות של TypeScript לגבי סוג הנתונים
+      const blob = new Blob([fileData as any], { type: 'video/mp4' });
+      const url = URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `video_studio_local_${Date.now()}.mp4`;
+      a.click();
+
+    } catch (err) {
+      console.error(err);
+      setError('Local processing failed. Your device might be out of memory.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleUpload = async () => {
+    if (orderedFiles.length === 0) return; // שורת ההגנה החדשה
     // --- בדיקת גדלי קבצים והגנה על השרת ---
     if (isConcatActive) {
       // בחיבור סרטונים, נסכום את הגודל של כל הקבצים יחד
       const totalSize = orderedFiles.reduce((sum, file) => sum + file.size, 0);
       const limitBytes = MAX_FILE_SIZES_MB['concat'] * 1024 * 1024;
       
-      if (totalSize > limitBytes) {
-        setError(`⚠️ The total size for concatenation exceeds the ${MAX_FILE_SIZES_MB['concat']}MB limit of the free tier. Please select smaller files.`);
-        return;
+    if (totalSize > limitBytes) {
+        console.log(`Total size exceeds ${MAX_FILE_SIZES_MB['concat']}MB limit. Switching to local processing!`);
+        await processLocally();
+        return; // עוצרים כאן כדי שלא יישלח בקשה לשרת הענן
       }
     } else {
       // בשרשור פעולות (Pipeline), נחפש איזו מהפעולות שנבחרו היא ה"כבדה" ביותר
@@ -117,9 +178,10 @@ const handleDrop = (index: number, type: 'actions' | 'files') => {
       const fileSize = orderedFiles[0].size;
       const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(1);
 
-      if (fileSize > limitBytes) {
-        setError(`⚠️ In the free tier, the '${actionLabels[strictestAction]}' action is limited to ${MAX_FILE_SIZES_MB[strictestAction]}MB. Your video is ${fileSizeMB}MB.`);
-        return;
+    if (fileSize > limitBytes) {
+        console.log(`Video exceeds ${MAX_FILE_SIZES_MB[strictestAction]}MB limit. Switching to local processing!`);
+        await processLocally();
+        return; // עוצרים כאן
       }
     }
     // -------------------------------------
