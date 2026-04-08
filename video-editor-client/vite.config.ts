@@ -1,9 +1,13 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// https://vite.dev/config/
+// https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    // Prevent crashes by excluding the editing engine and its utilities from pre-bundling
+    exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util']
+  },
   server: {
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",
