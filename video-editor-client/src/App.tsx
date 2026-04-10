@@ -22,6 +22,15 @@ const MAX_FILE_SIZES_MB: Record<ActionType, number> = {
   'remove-audio': 20
 };
 
+// מגבלות גודל מקסימלי עבור הדפדפן של המשתמש לפני שהוא קורס מחוסר זיכרון
+const LOCAL_MAX_SIZES_MB: Record<ActionType, number> = {
+  'boomerang': 15,
+  'reverse': 15,
+  'improve': 50,
+  'concat': 100, // חיבור סרטונים לא תופס המון RAM
+  'remove-audio': 100
+};
+
 const API_BASE_URL = import.meta.env.DEV 
   ? 'http://localhost:3003' 
   : 'https://media-editing-api.onrender.com';
@@ -101,7 +110,7 @@ const handleDrop = (index: number, type: 'actions' | 'files') => {
   const isConcatActive = actions.includes('concat');
   const hasOtherActions = actions.length > 0 && !isConcatActive;
 
-  const processLocally = async () => {
+  const processLocally = async (actionToRun: ActionType) => {
     if (orderedFiles.length === 0) return; // הגנה: מוודאים שיש קובץ
     
     setIsLoading(true);
@@ -128,13 +137,29 @@ const handleDrop = (index: number, type: 'actions' | 'files') => {
       const outputName = 'output.mp4';
       await ffmpeg.writeFile(inputName, await fetchFile(file));
 
-      // 3. הרצת פעולת העריכה (כרגע מדגים בומרנג קלאסי)
-      await ffmpeg.exec([
-        '-i', inputName,
-        '-filter_complex', '[0:v]reverse[r];[0:v][r]concat=n=2:v=1[v]',
-        '-map', '[v]',
-        outputName
-      ]);
+      let ffmpegArgs: string[] = [];
+
+      switch (actionToRun) {
+        case 'remove-audio':
+          // פקודת הקסם: -c:v copy מעתיק את הוידאו בלי לקדד מחדש!
+          ffmpegArgs = ['-i', inputName, '-c:v', 'copy', '-an', outputName];
+          break;
+        case 'boomerang':
+          ffmpegArgs = ['-i', inputName, '-filter_complex', '[0:v]scale=-2:480[vsmall];[vsmall]reverse[r];[vsmall][r]concat=n=2:v=1[v]', '-map', '[v]', outputName];
+          break;
+        default:
+          throw new Error('This action is not fully supported locally yet.');
+      }
+
+      await ffmpeg.exec(ffmpegArgs);
+
+      // // 3. הרצת פעולת העריכה (כרגע מדגים בומרנג קלאסי)
+      // await ffmpeg.exec([
+      //   '-i', inputName,
+      //   '-filter_complex', '[0:v]reverse[r];[0:v][r]concat=n=2:v=1[v]',
+      //   '-map', '[v]',
+      //   outputName
+      // ]);
 
       // 4. קריאת התוצאה ושמירה למחשב המשתמש
       const fileData = await ffmpeg.readFile(outputName);
@@ -156,35 +181,50 @@ const handleDrop = (index: number, type: 'actions' | 'files') => {
   };
 
   const handleUpload = async () => {
-    if (orderedFiles.length === 0) return; // שורת ההגנה החדשה
-    // --- בדיקת גדלי קבצים והגנה על השרת ---
+    if (orderedFiles.length === 0) return; 
+
+    // --- מערכת הגנה וניתוב (Two-Tier Routing) ---
     if (isConcatActive) {
-      // בחיבור סרטונים, נסכום את הגודל של כל הקבצים יחד
       const totalSize = orderedFiles.reduce((sum, file) => sum + file.size, 0);
-      const limitBytes = MAX_FILE_SIZES_MB['concat'] * 1024 * 1024;
+      const serverLimitBytes = MAX_FILE_SIZES_MB['concat'] * 1024 * 1024;
+      const localLimitBytes = LOCAL_MAX_SIZES_MB['concat'] * 1024 * 1024;
       
-    if (totalSize > limitBytes) {
-        console.log(`Total size exceeds ${MAX_FILE_SIZES_MB['concat']}MB limit. Switching to local processing!`);
-        await processLocally();
-        return; // עוצרים כאן כדי שלא יישלח בקשה לשרת הענן
+      // 1. קודם כל בודקים אם זה בכלל אפשרי בדפדפן (חסימה מוחלטת)
+      if (totalSize > localLimitBytes) {
+        setError(`⚠️ The files are too large (${(totalSize / (1024*1024)).toFixed(1)}MB). The maximum allowed for concatenation is ${LOCAL_MAX_SIZES_MB['concat']}MB.`);
+        return;
+      }
+
+      // 2. אם זה גדול לשרת, אבל מותר בדפדפן - ננתב למקומי
+      if (totalSize > serverLimitBytes) {
+        console.log("Routing to local WASM processing...");
+        await processLocally('concat');
+        return; 
       }
     } else {
-      // בשרשור פעולות (Pipeline), נחפש איזו מהפעולות שנבחרו היא ה"כבדה" ביותר
       const strictestAction = actions.reduce((prev, curr) => 
         MAX_FILE_SIZES_MB[curr] < MAX_FILE_SIZES_MB[prev] ? curr : prev
       );
       
-      const limitBytes = MAX_FILE_SIZES_MB[strictestAction] * 1024 * 1024;
+      const serverLimitBytes = MAX_FILE_SIZES_MB[strictestAction] * 1024 * 1024;
+      const localLimitBytes = LOCAL_MAX_SIZES_MB[strictestAction] * 1024 * 1024;
       const fileSize = orderedFiles[0].size;
       const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(1);
 
-    if (fileSize > limitBytes) {
-        console.log(`Video exceeds ${MAX_FILE_SIZES_MB[strictestAction]}MB limit. Switching to local processing!`);
-        await processLocally();
-        return; // עוצרים כאן
+      // 1. חסימה קשיחה למניעת קריסת הדפדפן
+      if (fileSize > localLimitBytes) {
+        setError(`⚠️ The '${actionLabels[strictestAction]}' action is limited to videos up to ${LOCAL_MAX_SIZES_MB[strictestAction]}MB. Your video is ${fileSizeMB}MB.`);
+        return;
+      }
+
+      // 2. ניתוב למקומי אם גדול מדי לשרת
+      if (fileSize > serverLimitBytes) {
+        console.log("Routing to local WASM processing...");
+        await processLocally(actions[0]);
+        return; 
       }
     }
-    // -------------------------------------
+    // ---------------------------------------------
     setIsLoading(true);
     setError(null);
     const evtSource = new EventSource(`${API_BASE_URL}/api/video/progress`);
