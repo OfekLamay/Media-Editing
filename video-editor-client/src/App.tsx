@@ -5,31 +5,34 @@ import './App.css';
 
 type ActionType = 'boomerang' | 'remove-audio' | 'reverse' | 'concat' | 'improve';
 
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
-const actionLabels: Record<ActionType, string> = {
-  'boomerang': '🔄 Boomerang',
-  'reverse': '⏪ Reverse',
-  'remove-audio': '🔇 Remove Audio',
-  'concat': '🔗 Concatenate',
-  'improve': '✨ Improve Quality'
-};
-
-const MAX_FILE_SIZES_MB: Record<ActionType, number> = {
-  'boomerang': 2,
-  'reverse': 2,
-  'improve': 10,
-  'concat': 15,
-  'remove-audio': 20
-};
-
-// מגבלות גודל מקסימלי עבור הדפדפן של המשתמש לפני שהוא קורס מחוסר זיכרון
+// מגבלות הדפדפן - שונות מאוד בין מחשב לטלפון!
 const LOCAL_MAX_SIZES_MB: Record<ActionType, number> = {
-  'boomerang': 15,
-  'reverse': 15,
-  'improve': 50,
-  'concat': 100, // חיבור סרטונים לא תופס המון RAM
-  'remove-audio': 100
+  // בטלפון כמעט בלתי אפשרי לעשות היפוך, לכן נגביל ל-1MB (ואולי יעדיפו להשתמש בשרת)
+  'boomerang': isMobile ? 1 : 15,
+  'reverse': isMobile ? 1 : 15,
+  'improve': isMobile ? 10 : 50,
+  // פעולות העתקה (Copy) לא תופסות זיכרון, אז אפשר לתת להן גבול גבוה גם בטלפון
+  'concat': isMobile ? 50 : 100, 
+  'remove-audio': isMobile ? 50 : 100
 };
+
+  const actionLabels: Record<ActionType, string> = {
+    'boomerang': '🔄 Boomerang',
+    'reverse': '⏪ Reverse',
+    'remove-audio': '🔇 Remove Audio',
+    'concat': '🔗 Concatenate',
+    'improve': '✨ Improve Quality'
+  };
+
+  const MAX_FILE_SIZES_MB: Record<ActionType, number> = {
+    'boomerang': 2,
+    'reverse': 2,
+    'improve': 10,
+    'concat': 15,
+    'remove-audio': 20
+  };
 
 const API_BASE_URL = import.meta.env.DEV 
   ? 'http://localhost:3003' 
@@ -88,7 +91,7 @@ function App() {
     else setOrderedFiles(list as File[]);
   };
 
-const handleDrop = (index: number, type: 'actions' | 'files') => {
+  const handleDrop = (index: number, type: 'actions' | 'files') => {
     if (draggedIndex === null || draggedIndex === index) return;
     
     // מפרידים את הלוגיקה כדי ש-TypeScript ידע בדיוק איזה סוג מערך אנחנו משנים
@@ -111,14 +114,13 @@ const handleDrop = (index: number, type: 'actions' | 'files') => {
   const hasOtherActions = actions.length > 0 && !isConcatActive;
 
   const processLocally = async (actionToRun: ActionType) => {
-    if (orderedFiles.length === 0) return; // הגנה: מוודאים שיש קובץ
+    if (orderedFiles.length === 0) return;
     
     setIsLoading(true);
     setError(null);
     const ffmpeg = ffmpegRef.current;
 
     try {
-      // 1. טעינת המנוע אם הוא טרם נטען
       if (!ffmpeg.loaded) {
         setProgressMsg('⬇️ Downloading local engine (approx 25MB)...');
         await ffmpeg.load();
@@ -126,44 +128,50 @@ const handleDrop = (index: number, type: 'actions' | 'files') => {
 
       setProgressMsg('🚀 Processing locally in your browser...');
       
-      // מעקב אחרי התקדמות האחוזים
       ffmpeg.on('progress', ({ progress }) => {
         setProgressMsg(`🚀 Processing locally: ${Math.round(progress * 100)}%`);
       });
 
-      // 2. כתיבת הקובץ המקורי לזיכרון של הדפדפן
-      const file = orderedFiles[0];
-      const inputName = 'input.mp4';
       const outputName = 'output.mp4';
-      await ffmpeg.writeFile(inputName, await fetchFile(file));
-
       let ffmpegArgs: string[] = [];
 
-      switch (actionToRun) {
-        case 'remove-audio':
-          // פקודת הקסם: -c:v copy מעתיק את הוידאו בלי לקדד מחדש!
-          ffmpegArgs = ['-i', inputName, '-c:v', 'copy', '-an', outputName];
-          break;
-        case 'boomerang':
-          ffmpegArgs = ['-i', inputName, '-filter_complex', '[0:v]scale=-2:480[vsmall];[vsmall]reverse[r];[vsmall][r]concat=n=2:v=1[v]', '-map', '[v]', outputName];
-          break;
-        default:
-          throw new Error('This action is not fully supported locally yet.');
+      // טיפול מיוחד בחיבור סרטונים (טוען את כולם ויוצר קובץ רשימה)
+      if (actionToRun === 'concat') {
+        let listContent = '';
+        for (let i = 0; i < orderedFiles.length; i++) {
+          const fileName = `input${i}.mp4`;
+          await ffmpeg.writeFile(fileName, await fetchFile(orderedFiles[i]));
+          listContent += `file '${fileName}'\n`;
+        }
+        await ffmpeg.writeFile('list.txt', listContent);
+        // שימוש ב-demuxer: מחבר סרטונים תוך שניות בלי לקדד מחדש (הכי חסכוני בזיכרון!)
+        ffmpegArgs = ['-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', outputName];
+      } 
+      else {
+        // שאר הפעולות דורשות רק קובץ אחד
+        const inputName = 'input.mp4';
+        await ffmpeg.writeFile(inputName, await fetchFile(orderedFiles[0]));
+
+        switch (actionToRun) {
+          case 'remove-audio':
+            ffmpegArgs = ['-i', inputName, '-c:v', 'copy', '-an', outputName];
+            break;
+          case 'reverse':
+            ffmpegArgs = ['-i', inputName, '-filter_complex', '[0:v]scale=-2:480,reverse[v]', '-map', '[v]', outputName];
+            break;
+          case 'boomerang':
+            ffmpegArgs = ['-i', inputName, '-filter_complex', '[0:v]scale=-2:480[vsmall];[vsmall]reverse[r];[vsmall][r]concat=n=2:v=1[v]', '-map', '[v]', outputName];
+            break;
+          case 'improve':
+            // משפר ניגודיות ומוסיף חידוד (Unsharp Mask)
+            ffmpegArgs = ['-i', inputName, '-vf', 'eq=contrast=1.2:brightness=0.05,unsharp=5:5:1.0', '-c:a', 'copy', outputName];
+            break;
+        }
       }
 
       await ffmpeg.exec(ffmpegArgs);
 
-      // // 3. הרצת פעולת העריכה (כרגע מדגים בומרנג קלאסי)
-      // await ffmpeg.exec([
-      //   '-i', inputName,
-      //   '-filter_complex', '[0:v]reverse[r];[0:v][r]concat=n=2:v=1[v]',
-      //   '-map', '[v]',
-      //   outputName
-      // ]);
-
-      // 4. קריאת התוצאה ושמירה למחשב המשתמש
       const fileData = await ffmpeg.readFile(outputName);
-      // שימוש ב-any "משתיק" את התלונות של TypeScript לגבי סוג הנתונים
       const blob = new Blob([fileData as any], { type: 'video/mp4' });
       const url = URL.createObjectURL(blob);
       
@@ -174,7 +182,9 @@ const handleDrop = (index: number, type: 'actions' | 'files') => {
 
     } catch (err) {
       console.error(err);
-      setError('Local processing failed. Your device might be out of memory.');
+      // הודעת שגיאה חכמה שיודעת אם המשתמש בטלפון או במחשב
+      const deviceName = isMobile ? 'phone' : 'computer';
+      setError(`❌ Local processing failed. Your ${deviceName}'s browser likely ran out of memory. Try a shorter video!`);
     } finally {
       setIsLoading(false);
     }
