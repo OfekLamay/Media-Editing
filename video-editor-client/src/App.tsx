@@ -9,9 +9,9 @@ const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 // מגבלות הדפדפן - שונות מאוד בין מחשב לטלפון!
 const LOCAL_MAX_SIZES_MB: Record<ActionType, number> = {
-  // בטלפון כמעט בלתי אפשרי לעשות היפוך, לכן נגביל ל-1MB (ואולי יעדיפו להשתמש בשרת)
-  'boomerang': isMobile ? 1 : 15,
-  'reverse': isMobile ? 1 : 15,
+  // בטלפון כמעט בלתי אפשרי לעשות היפוך, לכן נגביל ל-2.5MB (ואולי יעדיפו להשתמש בשרת)
+  'boomerang': isMobile ? 2.5 : 15,
+  'reverse': isMobile ? 2.5 : 15,
   'improve': isMobile ? 10 : 50,
   // פעולות העתקה (Copy) לא תופסות זיכרון, אז אפשר לתת להן גבול גבוה גם בטלפון
   'concat': isMobile ? 50 : 100, 
