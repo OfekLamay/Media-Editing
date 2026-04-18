@@ -13,7 +13,6 @@ const actionLabels: Record<ActionType, string> = {
 
 function App() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  // רשימת הקבצים בסדר שהמשתמש קבע
   const [orderedFiles, setOrderedFiles] = useState<File[]>([]);
   const [actions, setActions] = useState<ActionType[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -21,7 +20,7 @@ function App() {
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [progressMsg, setProgressMsg] = useState<string>('Processing...');
 
-  // סנכרון רשימת הקבצים המסודרת בכל פעם שבוחרים קבצים חדשים
+  // Sync the ordered files with the selected files whenever they change
   useEffect(() => {
     setOrderedFiles(selectedFiles);
   }, [selectedFiles]);
@@ -36,11 +35,11 @@ function App() {
 
   const toggleAction = (action: ActionType) => {
     setActions(prev => {
-      // אם בחרנו Concat - הוא מבטל את כל השאר
+      // Choosing "concat" deselects all other actions and vice versa, since it's a special case
       if (action === 'concat') {
         return prev.includes('concat') ? [] : ['concat'];
       }
-      // אם בחרנו פעולה אחרת והיה Concat - הוא מתבטל
+      // Choosing any other action deselects "concat" if it was selected, but allows chaining of the rest
       const filtered = prev.filter(a => a !== 'concat');
       if (filtered.includes(action)) {
         return filtered.filter(a => a !== action);
@@ -49,7 +48,7 @@ function App() {
     });
   };
 
-  // לוגיקה לשינוי סדר (עובדת גם על פעולות וגם על קבצים)
+  // Change the order of actions or files in the pipeline using the up/down buttons
   const moveItem = (index: number, direction: 'up' | 'down', type: 'actions' | 'files') => {
     const list = type === 'actions' ? [...actions] : [...orderedFiles];
     if (direction === 'up' && index > 0) {
@@ -65,7 +64,7 @@ function App() {
   const handleDrop = (index: number, type: 'actions' | 'files') => {
     if (draggedIndex === null || draggedIndex === index) return;
     
-    // מפרידים את הלוגיקה כדי ש-TypeScript ידע בדיוק איזה סוג מערך אנחנו משנים
+    // Reorder the list based on the dragged index and the drop index
     if (type === 'actions') {
       const list = [...actions];
       const item = list.splice(draggedIndex, 1)[0];
@@ -87,18 +86,24 @@ function App() {
     setProgressMsg('Sending to local engine...');
 
     try {
-      // כאן יבוא הגשר שלנו למוח של Electron בהמשך!
-      console.log("Actions requested:", actions);
-      console.log("Files:", orderedFiles);
-      
-      // נדמה השהייה קצרה רק ליופי בינתיים
-      setTimeout(() => {
-        setIsLoading(false);
-        alert("בקרוב: הוידאו יעובד מקומית!");
-      }, 1000);
+      // Using the ordered files for processing, which allows the user to set the order for concatenation or just keep it the same for single file actions
+      const filePaths = orderedFiles.map(file => (window as any).videoAPI.getPathForFile(file));
 
-    } catch (err) {
-      setError('Processing failed. Please try again.');
+      // Ensure we have a valid path for the first file, which is required for all actions. If this fails, it likely means Electron's security settings are blocking access to the file path, which can happen if the file is not properly selected or if there are permission issues.
+      if (!filePaths[0]) {
+        throw new Error("Electron blocked access to the file path. Could not find the file!");
+      }
+
+      const savedLocation = await (window as any).videoAPI.processVideo(filePaths, actions);
+
+      // Show an alert with the location of the saved video. This is a simple way to notify the user.
+      alert(`The video is ready!\nIt has been saved to:\n${savedLocation}`);
+
+    } catch (err: any) {
+      console.error(err);
+      // Show the errors in case there are any issues during processing.
+      setError(`❌ Error processing video: ${err.message || 'Unknown error'}`);
+    } finally {
       setIsLoading(false);
     }
   };
@@ -122,7 +127,6 @@ function App() {
               disabled={hasOtherActions}
             >🔗 Concatenate</button>
             
-            {/* שאר הכפתורים */}
             {(['boomerang', 'reverse', 'remove-audio', 'improve'] as ActionType[]).map(type => (
               <button
                 key={type}
@@ -138,7 +142,6 @@ function App() {
           </p>
         </div>
 
-        {/* Pipeline דינמי */}
         {(isConcatActive ? orderedFiles.length > 1 : actions.length > 0) && (
           <div className="pipeline-container">
             <h3>2. {isConcatActive ? 'Video Order' : 'Execution Order'}</h3>
