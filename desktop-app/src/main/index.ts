@@ -60,7 +60,7 @@ app.whenReady().then(() => {
   createWindow()
 
   // Listen for video processing requests from the renderer
-  ipcMain.handle('video:process', async (event, filePaths: string[], actions: string[]) => {
+  ipcMain.handle('video:process', async (_event, filePaths: string[], actions: string[]) => {
     const mainWindow = BrowserWindow.getAllWindows()[0];
     const sendProgress = (msg: string) => mainWindow.webContents.send('video:progress', msg);
 
