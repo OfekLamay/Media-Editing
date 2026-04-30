@@ -83,33 +83,32 @@ export const reverseVideo = (inputPath: string, outputPath: string): Promise<str
     });
 };
 
-// פונקציה לחיבור מספר סרטונים יחד (עם נרמול רזולוציה אוטומטי)
 export const concatVideos = (inputPaths: string[], outputPath: string): Promise<string> => {
     return new Promise((resolve, reject) => {
         console.log(`🔗 Concatenating ${inputPaths.length} videos with resolution normalization...`);
 
         const command = ffmpeg();
         
-        // 1. הוספת כל הקבצים כ-inputs
+        // 1. Add all input videos to the command
         inputPaths.forEach(path => {
             command.addInput(path);
         });
 
-        // 2. בניית שרשור הפילטרים הדינמי
+        // 2. Build the complex filter to normalize resolution and concatenate
         const complexFilter: string[] = [];
         let concatInputs = '';
 
         inputPaths.forEach((_, i) => {
-            // מנרמלים כל ערוץ וידאו: שינוי גודל ל-1920x1080, הוספת שוליים שחורים אם צריך למניעת עיוות, וקביעת 30FPS
+            // Normalize each video stream: resize to 1920x1080, add black borders if needed to prevent distortion, and set frame rate to 30FPS
             complexFilter.push(`[${i}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v${i}]`);
-            // מנרמלים כל ערוץ אודיו: המרה לתדר דגימה אחיד של 48000Hz
+            // Normalize each audio stream: resample to a consistent sample rate of 48000Hz
             complexFilter.push(`[${i}:a]aresample=48000[a${i}]`);
             
-            // אוספים את השמות של הערוצים המנורמלים לקראת החיבור
+            // Collect the names of the normalized streams for concatenation
             concatInputs += `[v${i}][a${i}]`;
         });
 
-        // פעולת החיבור עצמה על הערוצים המנורמלים
+        // The concatenation operation itself on the normalized streams
         complexFilter.push(`${concatInputs}concat=n=${inputPaths.length}:v=1:a=1[outv][outa]`);
 
         command

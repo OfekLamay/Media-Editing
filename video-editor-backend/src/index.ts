@@ -21,23 +21,22 @@ if (!fs.existsSync(outputsDir)) {
     fs.mkdirSync(outputsDir, { recursive: true });
 }
 
-// --- נתיב חדש: שידור עדכונים בזמן אמת (SSE) ---
 app.get('/api/video/progress', (req: Request, res: Response) => {
-    // הגדרות חובה כדי להשאיר את החיבור פתוח ולהזרים טקסט
+    // Keep the connection open for SSE
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
 
     const onProgress = (msg: string) => {
-        // SSE דורש פורמט ספציפי: data: [message] \n\n
+        // SSE format: "data: message\n\n"
         res.write(`data: ${msg}\n\n`);
     };
 
-    // מאזינים לאירועי 'update'
+    // Listen for progress updates and send them to the client
     progressEmitter.on('update', onProgress);
 
-    // כשהלקוח סוגר את החיבור, מנקים את המאזין כדי למנוע דליפת זיכרון
+    // Cleanup when the client disconnects
     req.on('close', () => {
         progressEmitter.off('update', onProgress);
     });
@@ -205,16 +204,16 @@ app.post('/api/video/improve', upload.single('video'), async (req: Request, res:
     }
 });
 
-// --- הראוט המשולב (Pipeline) המעודכן ---
+
 app.post('/api/video/pipeline', upload.array('videos', 10), async (req: Request, res: Response): Promise<void> => {
     const tempFilesToCleanup: string[] = [];
 
-    // מילון נתונים קטן לתרגום הפעולות לעברית עבור הודעות ההתקדמות
+    // Dictionary to map action names to user-friendly messages for progress updates
     const actionNames: Record<string, string> = {
-        'boomerang': 'מייצר בומרנג 🔄',
-        'reverse': 'הופך את הסרטון ⏪',
-        'remove-audio': 'מסיר את פס הקול 🔇',
-        'improve': 'משפר איכות ורזולוציה ✨'
+        'boomerang': 'Creating boomerang 🔄',
+        'reverse': 'Reversing video ⏪',
+        'remove-audio': 'Removing audio 🔇',
+        'improve': 'Improving quality ✨'
     };
 
     try {
@@ -233,7 +232,7 @@ app.post('/api/video/pipeline', upload.array('videos', 10), async (req: Request,
         files.forEach(f => tempFilesToCleanup.push(f.path));
         let currentVideoPath = files[0]!.path;
 
-        progressEmitter.emit('update', 'מתחיל לעבד את הקבצים... ⏳');
+        progressEmitter.emit('update', 'Starting to process the files... ⏳');
 
         if (actions.includes('concat')) {
             if (files.length < 2) {
@@ -241,7 +240,7 @@ app.post('/api/video/pipeline', upload.array('videos', 10), async (req: Request,
                 return;
             }
             
-            progressEmitter.emit('update', 'מחבר את הסרטונים למקשה אחת 🔗...');
+            progressEmitter.emit('update', 'Concatenating videos... 🔗');
             const nextTempPath = path.join(outputsDir, `temp_concat_${Date.now()}.mp4`);
             const inputPaths = files.map(f => f.path);
             await concatVideos(inputPaths, nextTempPath);
@@ -254,7 +253,7 @@ app.post('/api/video/pipeline', upload.array('videos', 10), async (req: Request,
         for (const action of actions) {
             const nextTempPath = path.join(outputsDir, `temp_${action}_${Date.now()}.mp4`);
             
-            // שידור הודעת ההתקדמות לפני תחילת הפעולה!
+            // Send progress update before starting the action
             progressEmitter.emit('update', `${actionNames[action] || action}...`);
 
             if (action === 'boomerang') await createBoomerang(currentVideoPath, nextTempPath);
@@ -266,7 +265,7 @@ app.post('/api/video/pipeline', upload.array('videos', 10), async (req: Request,
             tempFilesToCleanup.push(nextTempPath);
         }
 
-        progressEmitter.emit('update', 'אורז את הקובץ הסופי להורדה... 📦');
+        progressEmitter.emit('update', 'Preparing the final file for download... 📦');
         const finalFileName = `final_video_${Date.now()}.mp4`;
         
         res.download(currentVideoPath, finalFileName, (err) => {
@@ -283,7 +282,7 @@ app.post('/api/video/pipeline', upload.array('videos', 10), async (req: Request,
 
     } catch (error) {
         console.error('Error in processing pipeline:', error);
-        progressEmitter.emit('update', '❌ אירעה שגיאה בתהליך.');
+        progressEmitter.emit('update', '❌ An error occurred in the processing pipeline.');
         res.status(500).json({ error: 'An error occurred during the video processing pipeline.' });
         
         tempFilesToCleanup.forEach(filePath => {
