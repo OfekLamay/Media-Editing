@@ -12,10 +12,22 @@ const app = express();
 app.use(cors());
 const PORT = process.env.PORT || 3003;
 
+const progressEmitter = new EventEmitter();
+
+const outputsDir = path.join(__dirname, '../outputs');
+if (!fs.existsSync(outputsDir)) {
+    fs.mkdirSync(outputsDir, { recursive: true });
+}
+
+const uploadsDir = path.join(__dirname, '../uploads');
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
 // Set up multer for file uploads, specifying the destination and filename format
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, 'uploads/');
+        cb(null, uploadsDir);
     },
     filename: (req, file, cb) => {
         // Extract the file extension from the original filename
@@ -27,13 +39,6 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage: storage });
-
-const progressEmitter = new EventEmitter();
-
-const outputsDir = path.join(__dirname, '../outputs');
-if (!fs.existsSync(outputsDir)) {
-    fs.mkdirSync(outputsDir, { recursive: true });
-}
 
 app.get('/api/video/progress', (req: Request, res: Response) => {
     // Keep the connection open for SSE
