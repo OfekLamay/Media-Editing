@@ -314,6 +314,6 @@ app.post('/api/video/pipeline', upload.array('videos', 10), async (req: Request,
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`Server is running at http://localhost:${PORT}`);
+app.listen(PORT as number, '0.0.0.0', () => {
+    console.log(`Server is running on port ${PORT}`);
 });
