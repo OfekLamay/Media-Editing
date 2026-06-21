@@ -165,3 +165,62 @@ export const improveQuality = (inputPath: string, outputPath: string): Promise<s
             .run();
     });
 };
+
+export const changeSpeed = (inputPath: string, outputPath: string, speedFactor: number): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        console.log(`⏱️ Changing video speed to ${speedFactor}x...`);
+        
+        // Make the video faster by reducing the presentation timestamp (PTS) of each frame, 
+        // and adjust the audio speed using atempo filter
+        const videoPts = 1 / speedFactor;
+
+        ffmpeg(inputPath)
+            // Change video speed
+            .videoFilters(`setpts=${videoPts}*PTS`)
+            // Change audio speed
+            .audioFilters(`atempo=${speedFactor}`)
+            .outputOptions([
+                '-c:v libx264',
+                '-preset fast',
+                '-crf 18'
+            ])
+            .output(outputPath)
+            .on('end', () => {
+                console.log(`✅ Success! Speed changed to ${speedFactor}x.`);
+                resolve(outputPath);
+            })
+            .on('error', (err: Error) => {
+                console.error(`❌ Error changing speed:`, err.message);
+                reject(err);
+            })
+            .run();
+    });
+};
+
+export const trimVideo = (inputPath: string, outputPath: string, startTime: number, duration: number): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        console.log(`✂️ Trimming video: starting at ${startTime}s for ${duration}s...`);
+
+        ffmpeg(inputPath)
+            // Change the start time of the video
+            .setStartTime(startTime)
+            // Change the duration of the video
+            .setDuration(duration)
+            .outputOptions([
+                '-c:v libx264',
+                '-preset fast',
+                '-crf 18',
+                '-c:a aac'
+            ])
+            .output(outputPath)
+            .on('end', () => {
+                console.log(`✅ Success! Video trimmed.`);
+                resolve(outputPath);
+            })
+            .on('error', (err: Error) => {
+                console.error(`❌ Error trimming video:`, err.message);
+                reject(err);
+            })
+            .run();
+    });
+};

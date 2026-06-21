@@ -6,13 +6,27 @@ import fs from 'fs';
 import cors from 'cors';
 import { EventEmitter } from 'events';
 
-import { createBoomerang, removeAudio, reverseVideo, concatVideos, improveQuality } from './services/videoEditor';
+import { createBoomerang, removeAudio, reverseVideo, concatVideos, improveQuality, changeSpeed, trimVideo } from './services/videoEditor';
 
 const app = express();
 app.use(cors());
 const PORT = 3003;
 
-const upload = multer({ dest: 'uploads/' });
+// Set up multer for file uploads, specifying the destination and filename format
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, 'uploads/');
+    },
+    filename: (req, file, cb) => {
+        // Extract the file extension from the original filename
+        const ext = path.extname(file.originalname);
+        // Create a unique filename that includes the extension
+        const uniqueName = `video-${Date.now()}-${Math.round(Math.random() * 1E9)}${ext}`;
+        cb(null, uniqueName);
+    }
+});
+
+const upload = multer({ storage: storage });
 
 const progressEmitter = new EventEmitter();
 
@@ -213,7 +227,9 @@ app.post('/api/video/pipeline', upload.array('videos', 10), async (req: Request,
         'boomerang': 'Creating boomerang 🔄',
         'reverse': 'Reversing video ⏪',
         'remove-audio': 'Removing audio 🔇',
-        'improve': 'Improving quality ✨'
+        'improve': 'Improving quality ✨',
+        'speed': 'Changing speed ⏱️',
+        'trim': 'Trimming video ✂️'
     };
 
     try {
@@ -250,16 +266,23 @@ app.post('/api/video/pipeline', upload.array('videos', 10), async (req: Request,
             actions.splice(actions.indexOf('concat'), 1);
         }
 
+        // Get additional parameters for speed and trim actions, if they exist
+        const speedFactor = parseFloat(req.body.speedFactor) || 1.5; 
+        const trimStart = parseFloat(req.body.trimStart) || 0;
+        const trimDuration = parseFloat(req.body.trimDuration) || 5;
+
         for (const action of actions) {
             const nextTempPath = path.join(outputsDir, `temp_${action}_${Date.now()}.mp4`);
             
-            // Send progress update before starting the action
+            // Show user-friendly progress message based on the action being performed
             progressEmitter.emit('update', `${actionNames[action] || action}...`);
 
             if (action === 'boomerang') await createBoomerang(currentVideoPath, nextTempPath);
             else if (action === 'reverse') await reverseVideo(currentVideoPath, nextTempPath);
             else if (action === 'remove-audio') await removeAudio(currentVideoPath, nextTempPath);
             else if (action === 'improve') await improveQuality(currentVideoPath, nextTempPath);
+            else if (action === 'speed') await changeSpeed(currentVideoPath, nextTempPath, speedFactor);
+            else if (action === 'trim') await trimVideo(currentVideoPath, nextTempPath, trimStart, trimDuration);
 
             currentVideoPath = nextTempPath; 
             tempFilesToCleanup.push(nextTempPath);

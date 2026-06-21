@@ -3,19 +3,18 @@ import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile } from '@ffmpeg/util';
 import './App.css';
 
-type ActionType = 'boomerang' | 'remove-audio' | 'reverse' | 'concat' | 'improve';
+type ActionType = 'boomerang' | 'remove-audio' | 'reverse' | 'concat' | 'improve' | 'speed' | 'trim';
 
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
-// מגבלות הדפדפן - שונות מאוד בין מחשב לטלפון!
 const LOCAL_MAX_SIZES_MB: Record<ActionType, number> = {
-  // בטלפון כמעט בלתי אפשרי לעשות היפוך, לכן נגביל ל-2.5MB (ואולי יעדיפו להשתמש בשרת)
   'boomerang': isMobile ? 2.5 : 15,
   'reverse': isMobile ? 2.5 : 15,
   'improve': isMobile ? 10 : 50,
-  // פעולות העתקה (Copy) לא תופסות זיכרון, אז אפשר לתת להן גבול גבוה גם בטלפון
   'concat': isMobile ? 50 : 100, 
-  'remove-audio': isMobile ? 50 : 100
+  'remove-audio': isMobile ? 50 : 100,
+  'speed': isMobile ? 50 : 100,
+  'trim': isMobile ? 50 : 100
 };
 
   const actionLabels: Record<ActionType, string> = {
@@ -23,16 +22,34 @@ const LOCAL_MAX_SIZES_MB: Record<ActionType, number> = {
     'reverse': '⏪ Reverse',
     'remove-audio': '🔇 Remove Audio',
     'concat': '🔗 Concatenate',
-    'improve': '✨ Improve Quality'
+    'improve': '✨ Improve Quality',
+    'speed': '⏱️ Change Speed',
+    'trim': '✂️ Trim Video'
   };
 
-  const MAX_FILE_SIZES_MB: Record<ActionType, number> = {
+  const CLOUD_MAX_FILE_SIZES_MB: Record<ActionType, number> = {
     'boomerang': 2,
     'reverse': 2,
     'improve': 10,
     'concat': 15,
-    'remove-audio': 20
+    'remove-audio': 20,
+    'speed': 15,
+    'trim': 15
   };
+
+  const DEV_UNLIMITED_SIZES_MB: Record<ActionType, number> = {
+  'boomerang': 9999,
+  'reverse': 9999,
+  'improve': 9999,
+  'concat': 9999,
+  'remove-audio': 9999,
+  'speed': 9999,
+  'trim': 9999
+};
+
+const MAX_FILE_SIZES_MB = import.meta.env.DEV 
+  ? DEV_UNLIMITED_SIZES_MB
+  : CLOUD_MAX_FILE_SIZES_MB;
 
 const API_BASE_URL = import.meta.env.DEV 
   ? 'http://localhost:3003' 
@@ -47,6 +64,9 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [progressMsg, setProgressMsg] = useState<string>('Processing...');
+  const [speedFactor, setSpeedFactor] = useState<string>("1.5");
+  const [trimStart, setTrimStart] = useState<number>(0);
+  const [trimDuration, setTrimDuration] = useState<number>(5);
   const ffmpegRef = useRef(new FFmpeg());
 
 
@@ -244,6 +264,7 @@ function App() {
     // שולחים את הקבצים לפי הסדר שהמשתמש קבע ב-UI
     orderedFiles.forEach(file => formData.append('videos', file));
     formData.append('actions', JSON.stringify(actions));
+    
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/video/pipeline`, {
@@ -282,7 +303,7 @@ function App() {
             >🔗 Concatenate</button>
             
             {/* שאר הכפתורים */}
-            {(['boomerang', 'reverse', 'remove-audio', 'improve'] as ActionType[]).map(type => (
+            {(['boomerang', 'reverse', 'remove-audio', 'improve', 'speed', 'trim'] as ActionType[]).map(type => (
               <button
                 key={type}
                 className={actions.includes(type) ? 'active' : ''}
@@ -296,6 +317,55 @@ function App() {
              hasOtherActions ? "💡 You can chain these actions, but Concatenate must be done separately." : ""}
           </p>
         </div>
+        {/* ✨ אזור הגדרות דינמי שמופיע רק אם נבחרו פעולות שדורשות פרמטרים ✨ */}
+        {(actions.includes('speed') || actions.includes('trim')) && (
+          <div className="action-settings" style={{ background: '#f7fafc', padding: '15px', borderRadius: '8px', marginBottom: '2rem', border: '1px solid #e2e8f0' }}>
+            <h4 style={{ marginTop: 0, color: '#2c3e50' }}>⚙️ Action Settings</h4>
+            
+            <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+              {actions.includes('speed') && (
+                <div className="setting-group" style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                  <label style={{ fontWeight: 'bold', fontSize: '0.9rem' }}>Video Speed:</label>
+                  <select 
+                    value={speedFactor} 
+                    onChange={(e) => setSpeedFactor(e.target.value)}
+                    style={{ padding: '8px', borderRadius: '4px', border: '1px solid #cbd5e0' }}
+                  >
+                    <option value="0.5">Slower (0.5x)</option>
+                    <option value="0.66">Slower (0.66x)</option>
+                    <option value="1.5">Faster (1.5x)</option>
+                    <option value="2">Faster (2.0x)</option>
+                  </select>
+                </div>
+              )}
+
+              {actions.includes('trim') && (
+                <>
+                  <div className="setting-group" style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    <label style={{ fontWeight: 'bold', fontSize: '0.9rem' }}>Start Time (seconds):</label>
+                    <input 
+                      type="number" 
+                      min="0"
+                      value={trimStart} 
+                      onChange={(e) => setTrimStart(Number(e.target.value))}
+                      style={{ padding: '8px', borderRadius: '4px', border: '1px solid #cbd5e0', width: '120px' }}
+                    />
+                  </div>
+                  <div className="setting-group" style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    <label style={{ fontWeight: 'bold', fontSize: '0.9rem' }}>Duration (seconds):</label>
+                    <input 
+                      type="number" 
+                      min="1"
+                      value={trimDuration} 
+                      onChange={(e) => setTrimDuration(Number(e.target.value))}
+                      style={{ padding: '8px', borderRadius: '4px', border: '1px solid #cbd5e0', width: '120px' }}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Pipeline דינמי */}
         {(isConcatActive ? orderedFiles.length > 1 : actions.length > 0) && (
