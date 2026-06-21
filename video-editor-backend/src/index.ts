@@ -10,7 +10,7 @@ import { createBoomerang, removeAudio, reverseVideo, concatVideos, improveQualit
 
 const app = express();
 app.use(cors());
-const PORT = 3003;
+const PORT = process.env.PORT || 3003;
 
 // Set up multer for file uploads, specifying the destination and filename format
 const storage = multer.diskStorage({
