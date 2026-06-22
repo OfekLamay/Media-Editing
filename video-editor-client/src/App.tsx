@@ -57,7 +57,7 @@ const API_BASE_URL = import.meta.env.DEV
 
 function App() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  // רשימת הקבצים בסדר שהמשתמש קבע
+  // Files order for concatenation or actions order for processing
   const [orderedFiles, setOrderedFiles] = useState<File[]>([]);
   const [actions, setActions] = useState<ActionType[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -70,7 +70,7 @@ function App() {
   const ffmpegRef = useRef(new FFmpeg());
 
 
-  // סנכרון רשימת הקבצים המסודרת בכל פעם שבוחרים קבצים חדשים
+  // Sync the ordered files after changes
   useEffect(() => {
     setOrderedFiles(selectedFiles);
   }, [selectedFiles]);
@@ -85,11 +85,10 @@ function App() {
 
   const toggleAction = (action: ActionType) => {
     setActions(prev => {
-      // אם בחרנו Concat - הוא מבטל את כל השאר
+      // Choosing concat cancels all other actions and vice versa
       if (action === 'concat') {
         return prev.includes('concat') ? [] : ['concat'];
       }
-      // אם בחרנו פעולה אחרת והיה Concat - הוא מתבטל
       const filtered = prev.filter(a => a !== 'concat');
       if (filtered.includes(action)) {
         return filtered.filter(a => a !== action);
@@ -98,7 +97,7 @@ function App() {
     });
   };
 
-  // לוגיקה לשינוי סדר (עובדת גם על פעולות וגם על קבצים)
+  // Actions and files can be reordered by the user
   const moveItem = (index: number, direction: 'up' | 'down', type: 'actions' | 'files') => {
     const list = type === 'actions' ? [...actions] : [...orderedFiles];
     if (direction === 'up' && index > 0) {
@@ -114,7 +113,7 @@ function App() {
   const handleDrop = (index: number, type: 'actions' | 'files') => {
     if (draggedIndex === null || draggedIndex === index) return;
     
-    // מפרידים את הלוגיקה כדי ש-TypeScript ידע בדיוק איזה סוג מערך אנחנו משנים
+    // Consolidated logic for both actions and files reordering using drag-and-drop
     if (type === 'actions') {
       const list = [...actions];
       const item = list.splice(draggedIndex, 1)[0];
@@ -155,7 +154,7 @@ function App() {
       const outputName = 'output.mp4';
       let ffmpegArgs: string[] = [];
 
-      // טיפול מיוחד בחיבור סרטונים (טוען את כולם ויוצר קובץ רשימה)
+      // Concatenation is a special case that requires multiple files and a list input, while other actions work on a single file
       if (actionToRun === 'concat') {
         let listContent = '';
         for (let i = 0; i < orderedFiles.length; i++) {
@@ -164,11 +163,11 @@ function App() {
           listContent += `file '${fileName}'\n`;
         }
         await ffmpeg.writeFile('list.txt', listContent);
-        // שימוש ב-demuxer: מחבר סרטונים תוך שניות בלי לקדד מחדש (הכי חסכוני בזיכרון!)
+        // Using concat demuxer for lossless concatenation, which is very fast and efficient
         ffmpegArgs = ['-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', outputName];
       } 
       else {
-        // שאר הפעולות דורשות רק קובץ אחד
+        // All other actions only process the first file in the ordered list
         const inputName = 'input.mp4';
         await ffmpeg.writeFile(inputName, await fetchFile(orderedFiles[0]));
 
@@ -183,7 +182,7 @@ function App() {
             ffmpegArgs = ['-i', inputName, '-filter_complex', '[0:v]scale=-2:480[vsmall];[vsmall]reverse[r];[vsmall][r]concat=n=2:v=1[v]', '-map', '[v]', outputName];
             break;
           case 'improve':
-            // משפר ניגודיות ומוסיף חידוד (Unsharp Mask)
+            // Unsharp and contrast filters for a quick quality boost, without re-encoding the audio
             ffmpegArgs = ['-i', inputName, '-vf', 'eq=contrast=1.2:brightness=0.05,unsharp=5:5:1.0', '-c:a', 'copy', outputName];
             break;
         }
@@ -202,7 +201,7 @@ function App() {
 
     } catch (err) {
       console.error(err);
-      // הודעת שגיאה חכמה שיודעת אם המשתמש בטלפון או במחשב
+      // Error handling for local processing - likely due to memory limits in the browser, especially on mobile devices. We provide a user-friendly message suggesting a possible cause and solution.
       const deviceName = isMobile ? 'phone' : 'computer';
       setError(`❌ Local processing failed. Your ${deviceName}'s browser likely ran out of memory. Try a shorter video!`);
     } finally {
@@ -213,19 +212,19 @@ function App() {
   const handleUpload = async () => {
     if (orderedFiles.length === 0) return; 
 
-    // --- מערכת הגנה וניתוב (Two-Tier Routing) ---
+    // --- Routing Logic ---
     if (isConcatActive) {
       const totalSize = orderedFiles.reduce((sum, file) => sum + file.size, 0);
       const serverLimitBytes = MAX_FILE_SIZES_MB['concat'] * 1024 * 1024;
       const localLimitBytes = LOCAL_MAX_SIZES_MB['concat'] * 1024 * 1024;
       
-      // 1. קודם כל בודקים אם זה בכלל אפשרי בדפדפן (חסימה מוחלטת)
+      // 1. Check if total size exceeds local limit - if so, block and show error to prevent browser crash
       if (totalSize > localLimitBytes) {
         setError(`⚠️ The files are too large (${(totalSize / (1024*1024)).toFixed(1)}MB). The maximum allowed for concatenation is ${LOCAL_MAX_SIZES_MB['concat']}MB.`);
         return;
       }
 
-      // 2. אם זה גדול לשרת, אבל מותר בדפדפן - ננתב למקומי
+      // 2. If it is too large for the server but still within local limits, route to local processing instead of uploading
       if (totalSize > serverLimitBytes) {
         console.log("Routing to local WASM processing...");
         await processLocally('concat');
@@ -241,13 +240,13 @@ function App() {
       const fileSize = orderedFiles[0].size;
       const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(1);
 
-      // 1. חסימה קשיחה למניעת קריסת הדפדפן
+      // 1. Prevent processing if file exceeds local limits, as it would likely crash the browser. Show a clear error message indicating the issue and suggesting a solution (e.g. "Try a shorter video").
       if (fileSize > localLimitBytes) {
         setError(`⚠️ The '${actionLabels[strictestAction]}' action is limited to videos up to ${LOCAL_MAX_SIZES_MB[strictestAction]}MB. Your video is ${fileSizeMB}MB.`);
         return;
       }
 
-      // 2. ניתוב למקומי אם גדול מדי לשרת
+      // 2. Redirect to local processing if file exceeds server limits but is still within local limits, to provide a better user experience without forcing them to reduce their video size just to use the action.
       if (fileSize > serverLimitBytes) {
         console.log("Routing to local WASM processing...");
         await processLocally(actions[0]);
@@ -261,7 +260,7 @@ function App() {
     evtSource.onmessage = (e) => setProgressMsg(e.data);
 
     const formData = new FormData();
-    // שולחים את הקבצים לפי הסדר שהמשתמש קבע ב-UI
+    // Process the files in the user-defined order for concatenation, or just send the single file for other actions. The backend will determine how to handle them based on the selected actions.
     orderedFiles.forEach(file => formData.append('videos', file));
     formData.append('actions', JSON.stringify(actions));
     
@@ -302,7 +301,6 @@ function App() {
               disabled={hasOtherActions}
             >🔗 Concatenate</button>
             
-            {/* שאר הכפתורים */}
             {(['boomerang', 'reverse', 'remove-audio', 'improve', 'speed', 'trim'] as ActionType[]).map(type => (
               <button
                 key={type}
@@ -317,7 +315,6 @@ function App() {
              hasOtherActions ? "💡 You can chain these actions, but Concatenate must be done separately." : ""}
           </p>
         </div>
-        {/* ✨ אזור הגדרות דינמי שמופיע רק אם נבחרו פעולות שדורשות פרמטרים ✨ */}
         {(actions.includes('speed') || actions.includes('trim')) && (
           <div className="action-settings" style={{ background: '#f7fafc', padding: '15px', borderRadius: '8px', marginBottom: '2rem', border: '1px solid #e2e8f0' }}>
             <h4 style={{ marginTop: 0, color: '#2c3e50' }}>⚙️ Action Settings</h4>
@@ -367,7 +364,6 @@ function App() {
           </div>
         )}
 
-        {/* Pipeline דינמי */}
         {(isConcatActive ? orderedFiles.length > 1 : actions.length > 0) && (
           <div className="pipeline-container">
             <h3>2. {isConcatActive ? 'Video Order' : 'Execution Order'}</h3>
