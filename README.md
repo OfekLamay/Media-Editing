@@ -36,7 +36,7 @@ Initially designed as a standard Client-Server web application, this project was
 
 1. Clone the repository:
    ```bash
-   git clone [https://github.com/OfekLamay/Media-Editing.git](https://github.com/OfekLamay/Media-Editing.git)
+   git clone https://github.com/OfekLamay/Media-Editing.git
    cd Media-Editing/desktop-app
    ```
 
@@ -60,10 +60,7 @@ The output executable will be located in the dist folder.
 
 
 ## 💡 Usage
-Select your desired video editing action(s) from the top menu.
-
-Drag and drop to rearrange the execution order if chaining multiple actions.
-
-Upload your video file(s).
-
-Click Start Editing. The progress will be displayed, and the final video will be automatically saved to your computer's Downloads folder.
+1. Select your desired video editing action(s) from the top menu.
+2. Drag and drop to rearrange the execution order if chaining multiple actions.
+3. Upload your video file(s).
+4. Click Start Editing. The progress will be displayed, and the final video will be automatically saved to your computer's Downloads folder.
