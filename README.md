@@ -38,7 +38,7 @@ Video Studio Pro features a smart hybrid-processing architecture that dynamicall
 
 1. Clone the repository:
    ```bash
-   git clone [https://github.com/OfekLamay/Media-Editing.git](https://github.com/OfekLamay/Media-Editing.git)
+   git clone https://github.com/OfekLamay/Media-Editing.git
    ```
 
 2. Start the Backend Server:
