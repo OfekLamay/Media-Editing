@@ -27,14 +27,15 @@ const LOCAL_MAX_SIZES_MB: Record<ActionType, number> = {
     'trim': '✂️ Trim Video'
   };
 
-  const CLOUD_MAX_FILE_SIZES_MB: Record<ActionType, number> = {
-    'boomerang': 2,
-    'reverse': 2,
-    'improve': 10,
-    'concat': 15,
-    'remove-audio': 20,
-    'speed': 15,
-    'trim': 15
+// Using Oracle's free tier cloud
+const CLOUD_MAX_FILE_SIZES_MB: Record<ActionType, number> = {
+    'boomerang': 100,
+    'reverse': 100,
+    'improve': 250,
+    'concat': 350,
+    'remove-audio': 350,
+    'speed': 250,
+    'trim': 350
   };
 
   const DEV_UNLIMITED_SIZES_MB: Record<ActionType, number> = {
