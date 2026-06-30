@@ -53,7 +53,7 @@ const MAX_FILE_SIZES_MB = import.meta.env.DEV
 
 const API_BASE_URL = import.meta.env.DEV 
   ? 'http://localhost:3003' 
-  : 'https://media-editing-api.onrender.com';
+  : 'http://82.70.209.196:3003';
 
 function App() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
