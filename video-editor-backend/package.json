@@ -24,6 +24,8 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@ffprobe-installer/ffprobe": "^2.1.2",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "fluent-ffmpeg": "^2.1.3",

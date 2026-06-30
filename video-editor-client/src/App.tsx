@@ -218,18 +218,21 @@ function App() {
       const serverLimitBytes = MAX_FILE_SIZES_MB['concat'] * 1024 * 1024;
       const localLimitBytes = LOCAL_MAX_SIZES_MB['concat'] * 1024 * 1024;
       
-      // 1. Check if total size exceeds local limit - if so, block and show error to prevent browser crash
-      if (totalSize > localLimitBytes) {
-        setError(`⚠️ The files are too large (${(totalSize / (1024*1024)).toFixed(1)}MB). The maximum allowed for concatenation is ${LOCAL_MAX_SIZES_MB['concat']}MB.`);
-        return;
-      }
-
-      // 2. If it is too large for the server but still within local limits, route to local processing instead of uploading
+      // Does the total size exceed the server limit for concatenation?
       if (totalSize > serverLimitBytes) {
-        console.log("Routing to local WASM processing...");
-        await processLocally('concat');
-        return; 
+        // Too much for the server, but still fits within the local browser limit
+        if (totalSize <= localLimitBytes) {
+          console.log("Routing to local WASM processing...");
+          await processLocally('concat');
+          return;
+        } else {
+          // Too large for both the server and the browser - error
+          setError(`⚠️ The files are too large (${(totalSize / (1024*1024)).toFixed(1)}MB). The maximum allowed for concatenation is ${MAX_FILE_SIZES_MB['concat']}MB.`);
+          return;
+        }
       }
+      // If we've reached here, the file is smaller than serverLimitBytes, and it will simply continue to upload to the server!
+      
     } else {
       const strictestAction = actions.reduce((prev, curr) => 
         MAX_FILE_SIZES_MB[curr] < MAX_FILE_SIZES_MB[prev] ? curr : prev
@@ -240,30 +243,47 @@ function App() {
       const fileSize = orderedFiles[0].size;
       const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(1);
 
-      // 1. Prevent processing if file exceeds local limits, as it would likely crash the browser. Show a clear error message indicating the issue and suggesting a solution (e.g. "Try a shorter video").
-      if (fileSize > localLimitBytes) {
-        setError(`⚠️ The '${actionLabels[strictestAction]}' action is limited to videos up to ${LOCAL_MAX_SIZES_MB[strictestAction]}MB. Your video is ${fileSizeMB}MB.`);
-        return;
-      }
-
-      // 2. Redirect to local processing if file exceeds server limits but is still within local limits, to provide a better user experience without forcing them to reduce their video size just to use the action.
+      // Does the file size exceed the server limit for the selected action?
       if (fileSize > serverLimitBytes) {
-        console.log("Routing to local WASM processing...");
-        await processLocally(actions[0]);
-        return; 
+        // If it's too large for the server but fits within the local browser limit
+        if (fileSize <= localLimitBytes) {
+          console.log("Routing to local WASM processing...");
+          await processLocally(actions[0]);
+          return; 
+        } else {
+          // Too large for both the server and the browser
+          setError(`⚠️ The '${actionLabels[strictestAction]}' action is limited to videos up to ${MAX_FILE_SIZES_MB[strictestAction]}MB. Your video is ${fileSizeMB}MB.`);
+          return;
+        }
       }
+      // Will continue to upload...
     }
     // ---------------------------------------------
     setIsLoading(true);
     setError(null);
-    const evtSource = new EventSource(`${API_BASE_URL}/api/video/progress`);
+    
+    // Create a unique job ID for this processing session, which will be used to track progress on the server side and provide real-time updates to the user.
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
+    // Link to the server-side progress updates via Server-Sent Events (SSE).
+    // This allows the frontend to receive real-time progress messages from the backend as the video processing occurs, enhancing user experience by keeping them informed.
+    const evtSource = new EventSource(`${API_BASE_URL}/api/video/progress?jobId=${jobId}`);
     evtSource.onmessage = (e) => setProgressMsg(e.data);
 
     const formData = new FormData();
     // Process the files in the user-defined order for concatenation, or just send the single file for other actions. The backend will determine how to handle them based on the selected actions.
+
     orderedFiles.forEach(file => formData.append('videos', file));
     formData.append('actions', JSON.stringify(actions));
+    formData.append('jobId', jobId); // Add the jobId to the form data so the backend can associate this request with the correct progress updates.
     
+    if (actions.includes('speed')) {
+      formData.append('speedFactor', speedFactor);
+    }
+    if (actions.includes('trim')) {
+      formData.append('trimStart', trimStart.toString());
+      formData.append('trimDuration', trimDuration.toString());
+    }
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/video/pipeline`, {

@@ -6,10 +6,33 @@ import fs from 'fs';
 import cors from 'cors';
 import { EventEmitter } from 'events';
 
-import { createBoomerang, removeAudio, reverseVideo, concatVideos, improveQuality, changeSpeed, trimVideo } from './services/videoEditor';
+import { createBoomerang, removeAudio, reverseVideo, concatVideos, improveQuality, changeSpeed, trimVideo, singlePassEdit } from './services/videoEditor';
 
 const app = express();
-app.use(cors());
+
+const allowedOrigins = ['http://localhost:5173', 'https://media-editing.vercel.app/'];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  }
+}));
+
+// Action translation for progress messages
+const actionNames: Record<string, string> = {
+    'boomerang': 'Creating Boomerang 🔄',
+    'reverse': 'Reversing Video ⏪',
+    'remove-audio': 'Removing Audio 🔇',
+    'improve': 'Improving Quality ✨',
+    'speed': 'Changing Speed ⏱️',
+    'trim': 'Trimming Video ✂️',
+    'concat': 'Concatenating Videos 🔗'
+};
+
 const PORT = process.env.PORT || 3003;
 
 const progressEmitter = new EventEmitter();
@@ -38,284 +61,107 @@ const storage = multer.diskStorage({
     }
 });
 
-const upload = multer({ storage: storage });
+const upload = multer({ 
+    storage: storage,
+    limits: { fileSize: 500 * 1024 * 1024 } // e.g. 500MB
+});
 
-app.get('/api/video/progress', (req: Request, res: Response) => {
+app.get('/api/video/progress', (req, res) => {
     // Keep the connection open for SSE
+    const jobId = req.query.jobId as string;
+    
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders();
 
-    const onProgress = (msg: string) => {
-        // SSE format: "data: message\n\n"
+    // Use the jobId to create a unique event name for this specific job's progress updates
+    const eventName = `update-${jobId}`;
+    
+    const listener = (msg: string) => {
         res.write(`data: ${msg}\n\n`);
     };
 
-    // Listen for progress updates and send them to the client
-    progressEmitter.on('update', onProgress);
+    progressEmitter.on(eventName, listener);
 
     // Cleanup when the client disconnects
     req.on('close', () => {
-        progressEmitter.off('update', onProgress);
+        progressEmitter.removeListener(eventName, listener);
     });
 });
 
-app.post('/api/video/boomerang', upload.single('video'), async (req: Request, res: Response): Promise<void> => {
+app.post('/api/video/pipeline', upload.array('videos'), async (req, res) => {
+    const files = req.files as Express.Multer.File[];
+    const actions = JSON.parse(req.body.actions || '[]');
+    const jobId = req.body.jobId; 
+    
+    if (!files || files.length === 0) return res.status(400).send('No files uploaded.');
+
+    const tempFilesToCleanup: string[] = [...files.map(f => f.path)];
+    const sendProgress = (msg: string) => { if (jobId) progressEmitter.emit(`update-${jobId}`, msg); };
+
     try {
-        if (!req.file) {
-            res.status(400).json({ error: 'No video file uploaded.' });
-            return;
-        }
-
-        const inputVideoPath = req.file.path; 
-        const outputFileName = `boomerang_${Date.now()}.mp4`;
-        const outputVideoPath = path.join(outputsDir, outputFileName);
-
-        await createBoomerang(inputVideoPath, outputVideoPath);
-
-        res.download(outputVideoPath, outputFileName, (err) => {
-            if (err) {
-                console.error('Error sending file to client:', err);
-            }
-            
-            try {
-                fs.unlinkSync(inputVideoPath);
-                fs.unlinkSync(outputVideoPath);
-            } catch (cleanupErr) {
-                console.error('Error deleting temporary files:', cleanupErr);
-            }
-        });
-
-    } catch (error) {
-        console.error('Error in boomerang creation:', error);
-        res.status(500).json({ error: 'An error occurred while editing the video on the server.' });
-    }
-});
-
-app.post('/api/video/remove-audio', upload.single('video'), async (req: Request, res: Response): Promise<void> => {
-    try {
-        if (!req.file) {
-            res.status(400).json({ error: 'No video file uploaded.' });
-            return;
-        }
-
-        const inputVideoPath = req.file.path; 
-        const outputFileName = `no_audio_${Date.now()}.mp4`;
-        const outputVideoPath = path.join(outputsDir, outputFileName);
-
-        await removeAudio(inputVideoPath, outputVideoPath);
-
-        res.download(outputVideoPath, outputFileName, (err) => {
-            if (err) {
-                console.error('Error sending file to client:', err);
-            }
-            
-            try {
-                fs.unlinkSync(inputVideoPath);
-                fs.unlinkSync(outputVideoPath);
-            } catch (cleanupErr) {
-                console.error('Error deleting temporary files:', cleanupErr);
-            }
-        });
-
-    } catch (error) {
-        console.error('Error in audio removal:', error);
-        res.status(500).json({ error: 'An error occurred while removing audio on the server.' });
-    }
-});
-
-app.post('/api/video/reverse', upload.single('video'), async (req: Request, res: Response): Promise<void> => {
-    try {
-        if (!req.file) {
-            res.status(400).json({ error: 'No video file uploaded.' });
-            return;
-        }
-
-        const inputVideoPath = req.file.path; 
-        const outputFileName = `reversed_${Date.now()}.mp4`;
-        const outputVideoPath = path.join(outputsDir, outputFileName);
-
-        await reverseVideo(inputVideoPath, outputVideoPath);
-
-        res.download(outputVideoPath, outputFileName, (err) => {
-            if (err) {
-                console.error('Error sending file to client:', err);
-            }
-            
-            try {
-                fs.unlinkSync(inputVideoPath);
-                fs.unlinkSync(outputVideoPath);
-            } catch (cleanupErr) {
-                console.error('Error deleting temporary files:', cleanupErr);
-            }
-        });
-
-    } catch (error) {
-        console.error('Error in reversing video:', error);
-        res.status(500).json({ error: 'An error occurred while reversing the video on the server.' });
-    }
-});
-
-app.post('/api/video/concat', upload.array('videos', 10), async (req: Request, res: Response): Promise<void> => {
-    try {
-        const files = req.files as Express.Multer.File[];
+        let currentVideoPath = files[0].path;
+        const outputsDir = path.join(__dirname, '../outputs');
         
-        if (!files || files.length < 2) {
-            res.status(400).json({ error: 'Please upload at least 2 videos to concatenate.' });
-            return;
-        }
+        // Useful flags to determine which actions are active
+        const isConcatActive = actions.includes('concat');
+        const isBoomerangActive = actions.includes('boomerang');
+        
+        // The actions that can be applied in a single pass
+        const singlePassActions = actions.filter((a: string) => 
+            ['trim', 'speed', 'reverse', 'remove-audio', 'improve'].includes(a)
+        );
 
-        const inputPaths = files.map(file => file.path); 
-        const outputFileName = `concatenated_${Date.now()}.mp4`;
-        const outputVideoPath = path.join(outputsDir, outputFileName);
-
-        await concatVideos(inputPaths, outputVideoPath);
-
-        res.download(outputVideoPath, outputFileName, (err) => {
-            if (err) {
-                console.error('Error sending file to client:', err);
-            }
-            
-            try {
-                inputPaths.forEach(p => fs.unlinkSync(p));
-                fs.unlinkSync(outputVideoPath);
-            } catch (cleanupErr) {
-                console.error('Error deleting temporary files:', cleanupErr);
-            }
-        });
-
-    } catch (error) {
-        console.error('Error in concatenating videos:', error);
-        res.status(500).json({ error: 'An error occurred while concatenating the videos on the server.' });
-    }
-});
-
-app.post('/api/video/improve', upload.single('video'), async (req: Request, res: Response): Promise<void> => {
-    try {
-        if (!req.file) {
-            res.status(400).json({ error: 'No video file uploaded.' });
-            return;
-        }
-
-        const inputVideoPath = req.file.path; 
-        const outputFileName = `improved_${Date.now()}.mp4`;
-        const outputVideoPath = path.join(outputsDir, outputFileName);
-
-        await improveQuality(inputVideoPath, outputVideoPath);
-
-        res.download(outputVideoPath, outputFileName, (err) => {
-            if (err) {
-                console.error('Error sending file to client:', err);
-            }
-            
-            try {
-                fs.unlinkSync(inputVideoPath);
-                fs.unlinkSync(outputVideoPath);
-            } catch (cleanupErr) {
-                console.error('Error deleting temporary files:', cleanupErr);
-            }
-        });
-
-    } catch (error) {
-        console.error('Error in improving video quality:', error);
-        res.status(500).json({ error: 'An error occurred while improving the video on the server.' });
-    }
-});
-
-
-app.post('/api/video/pipeline', upload.array('videos', 10), async (req: Request, res: Response): Promise<void> => {
-    const tempFilesToCleanup: string[] = [];
-
-    // Dictionary to map action names to user-friendly messages for progress updates
-    const actionNames: Record<string, string> = {
-        'boomerang': 'Creating boomerang 🔄',
-        'reverse': 'Reversing video ⏪',
-        'remove-audio': 'Removing audio 🔇',
-        'improve': 'Improving quality ✨',
-        'speed': 'Changing speed ⏱️',
-        'trim': 'Trimming video ✂️'
-    };
-
-    try {
-        const files = req.files as Express.Multer.File[];
-        const actions: string[] = JSON.parse(req.body.actions || '[]');
-
-        if (!files || files.length === 0) {
-            res.status(400).json({ error: 'No video files uploaded.' });
-            return;
-        }
-        if (actions.length === 0) {
-            res.status(400).json({ error: 'No actions selected.' });
-            return;
-        }
-
-        files.forEach(f => tempFilesToCleanup.push(f.path));
-        let currentVideoPath = files[0]!.path;
-
-        progressEmitter.emit('update', 'Starting to process the files... ⏳');
-
-        if (actions.includes('concat')) {
-            if (files.length < 2) {
-                res.status(400).json({ error: 'Need at least 2 files to concat.' });
-                return;
-            }
-            
-            progressEmitter.emit('update', 'Concatenating videos... 🔗');
-            const nextTempPath = path.join(outputsDir, `temp_concat_${Date.now()}.mp4`);
-            const inputPaths = files.map(f => f.path);
-            await concatVideos(inputPaths, nextTempPath);
-            
-            currentVideoPath = nextTempPath;
-            tempFilesToCleanup.push(nextTempPath);
-            actions.splice(actions.indexOf('concat'), 1);
-        }
-
-        // Get additional parameters for speed and trim actions, if they exist
         const speedFactor = parseFloat(req.body.speedFactor) || 1.5; 
         const trimStart = parseFloat(req.body.trimStart) || 0;
         const trimDuration = parseFloat(req.body.trimDuration) || 5;
 
-        for (const action of actions) {
-            const nextTempPath = path.join(outputsDir, `temp_${action}_${Date.now()}.mp4`);
-            
-            // Show user-friendly progress message based on the action being performed
-            progressEmitter.emit('update', `${actionNames[action] || action}...`);
+        // Step 1: Concatenate videos (if selected)
+        if (isConcatActive) {
+            sendProgress('🔗 Concatenating videos...');
+            const nextTempPath = path.join(outputsDir, `temp_concat_${Date.now()}.mp4`);
+            await concatVideos(files.map(f => f.path), nextTempPath);
+            currentVideoPath = nextTempPath;
+            tempFilesToCleanup.push(nextTempPath);
+        }
 
-            if (action === 'boomerang') await createBoomerang(currentVideoPath, nextTempPath);
-            else if (action === 'reverse') await reverseVideo(currentVideoPath, nextTempPath);
-            else if (action === 'remove-audio') await removeAudio(currentVideoPath, nextTempPath);
-            else if (action === 'improve') await improveQuality(currentVideoPath, nextTempPath);
-            else if (action === 'speed') await changeSpeed(currentVideoPath, nextTempPath, speedFactor);
-            else if (action === 'trim') await trimVideo(currentVideoPath, nextTempPath, trimStart, trimDuration);
+        // Step 2: Create Boomerang (if selected)
+        if (isBoomerangActive) {
+            sendProgress('🔄 Creating Boomerang...');
+            const nextTempPath = path.join(outputsDir, `temp_boomerang_${Date.now()}.mp4`);
+            await createBoomerang(currentVideoPath, nextTempPath);
+            currentVideoPath = nextTempPath;
+            tempFilesToCleanup.push(nextTempPath);
+        }
 
+        // Step 3: Single-pass editing (if any actions are selected)
+        if (singlePassActions.length > 0) {
+            sendProgress('✨ Applying edits & optimizing...');
+            const nextTempPath = path.join(outputsDir, `temp_final_${Date.now()}.mp4`);
+            await singlePassEdit(currentVideoPath, nextTempPath, singlePassActions, { speedFactor, trimStart, trimDuration });
             currentVideoPath = nextTempPath; 
             tempFilesToCleanup.push(nextTempPath);
         }
 
-        progressEmitter.emit('update', 'Preparing the final file for download... 📦');
-        const finalFileName = `final_video_${Date.now()}.mp4`;
+        sendProgress('✅ Finished! Preparing download...');
         
-        res.download(currentVideoPath, finalFileName, (err) => {
-            if (err) console.error('Error sending file:', err);
-            
+        res.download(currentVideoPath, `video_studio_${Date.now()}.mp4`, (err) => {
+            if (err) console.error("Error during download:", err);
+            if (jobId) progressEmitter.emit(`update-${jobId}`, '✅ Download complete!');
+        });
+
+    } catch (error: any) {
+        console.error("Pipeline processing error:", error);
+        if (jobId) progressEmitter.emit(`update-${jobId}`, '❌ Error processing video');
+        if (!res.headersSent) res.status(500).send('Processing failed');
+    } finally {
+        setTimeout(() => {
             tempFilesToCleanup.forEach(filePath => {
                 try {
                     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-                } catch (cleanupErr) {
-                    console.error(`Error deleting temp file ${filePath}:`, cleanupErr);
-                }
+                } catch (e) {}
             });
-        });
-
-    } catch (error) {
-        console.error('Error in processing pipeline:', error);
-        progressEmitter.emit('update', '❌ An error occurred in the processing pipeline.');
-        res.status(500).json({ error: 'An error occurred during the video processing pipeline.' });
-        
-        tempFilesToCleanup.forEach(filePath => {
-            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        });
+        }, 10000); 
     }
 });
 

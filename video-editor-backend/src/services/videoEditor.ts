@@ -1,11 +1,15 @@
 import ffmpeg from 'fluent-ffmpeg';
 import path from 'path';
-import { stderr } from 'process';
+
+import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+import ffprobeInstaller from '@ffprobe-installer/ffprobe';
+
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+ffmpeg.setFfprobePath(ffprobeInstaller.path);
 
 export const createBoomerang = (inputPath: string, outputPath: string): Promise<string> => {
     return new Promise((resolve, reject) => {
         console.log(`🎬 Processing boomerang video...`);
-
         ffmpeg(inputPath)
             .complexFilter([
                 '[0:v]reverse[rev]',
@@ -13,22 +17,14 @@ export const createBoomerang = (inputPath: string, outputPath: string): Promise<
             ])
             .outputOptions([
                 '-map [outv]',
-                '-vsync 1',
-                '-async 1',
-                '-threads 1',
+                '-vsync 1', '-async 1',
                 '-c:v libx264',
-                '-preset fast',
-                '-crf 18'
+                '-preset veryfast',
+                '-crf 23'
             ])
             .output(outputPath)
-            .on('end', () => {
-                console.log(`✅ Success! Video processing completed. Ready for delivery.`);
-                resolve(outputPath);
-            })
-            .on('error', (err: Error) => {
-                console.error(`❌ Error processing video:`, err.message);
-                reject(err);
-            })
+            .on('end', () => resolve(outputPath))
+            .on('error', (err: Error) => reject(err))
             .run();
     });
 };
@@ -64,7 +60,6 @@ export const reverseVideo = (inputPath: string, outputPath: string): Promise<str
                 '-vsync 1',
                 '-async 1',
                 '-c:v libx264',
-                '-preset fast',
                 '-crf 18',
                 '-pix_fmt yuv420p',
                 '-c:a aac',
@@ -85,53 +80,34 @@ export const reverseVideo = (inputPath: string, outputPath: string): Promise<str
 
 export const concatVideos = (inputPaths: string[], outputPath: string): Promise<string> => {
     return new Promise((resolve, reject) => {
-        console.log(`🔗 Concatenating ${inputPaths.length} videos with resolution normalization...`);
-
+        console.log(`🔗 Concatenating ${inputPaths.length} videos...`);
         const command = ffmpeg();
         
-        // 1. Add all input videos to the command
-        inputPaths.forEach(path => {
-            command.addInput(path);
-        });
+        inputPaths.forEach(path => command.addInput(path));
 
-        // 2. Build the complex filter to normalize resolution and concatenate
         const complexFilter: string[] = [];
         let concatInputs = '';
 
         inputPaths.forEach((_, i) => {
-            // Normalize each video stream: resize to 1920x1080, add black borders if needed to prevent distortion, and set frame rate to 30FPS
             complexFilter.push(`[${i}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v${i}]`);
-            // Normalize each audio stream: resample to a consistent sample rate of 48000Hz
             complexFilter.push(`[${i}:a]aresample=48000[a${i}]`);
-            
-            // Collect the names of the normalized streams for concatenation
             concatInputs += `[v${i}][a${i}]`;
         });
 
-        // The concatenation operation itself on the normalized streams
         complexFilter.push(`${concatInputs}concat=n=${inputPaths.length}:v=1:a=1[outv][outa]`);
 
-        command
-            .complexFilter(complexFilter)
+        command.complexFilter(complexFilter)
             .outputOptions([
-                '-map [outv]',
-                '-map [outa]',
+                '-map [outv]', '-map [outa]',
                 '-c:v libx264',
-                '-preset fast',
-                '-crf 18',
+                '-preset veryfast', 
+                '-crf 23',          
                 '-pix_fmt yuv420p',
-                '-c:a aac',
-                '-b:a 192k'
+                '-c:a aac', '-b:a 192k'
             ])
             .output(outputPath)
-            .on('end', () => {
-                console.log(`✅ Success! Videos concatenated. Ready for delivery.`);
-                resolve(outputPath);
-            })
-            .on('error', (err: any) => {
-                console.error(`❌ Error concatenating videos:`, err.message);
-                reject(err);
-            })
+            .on('end', () => resolve(outputPath))
+            .on('error', (err: any) => reject(err))
             .run();
     });
 };
@@ -143,8 +119,7 @@ export const improveQuality = (inputPath: string, outputPath: string): Promise<s
         ffmpeg(inputPath)
             .outputOptions([
                 '-c:v libx264',
-                '-preset slow',
-                '-crf 17',
+                '-crf 23',
                 '-profile:v high',
                 '-level 4.2',
                 '-pix_fmt yuv420p',
@@ -168,21 +143,33 @@ export const improveQuality = (inputPath: string, outputPath: string): Promise<s
 
 export const changeSpeed = (inputPath: string, outputPath: string, speedFactor: number): Promise<string> => {
     return new Promise((resolve, reject) => {
-        console.log(`⏱️ Changing video speed to ${speedFactor}x...`);
-        
-        // Make the video faster by reducing the presentation timestamp (PTS) of each frame, 
-        // and adjust the audio speed using atempo filter
-        const videoPts = 1 / speedFactor;
+        console.log(`⏱️ Checking audio streams for speed change...`);
 
-        ffmpeg(inputPath)
-            // Change video speed
-            .videoFilters(`setpts=${videoPts}*PTS`)
-            // Change audio speed
-            .audioFilters(`atempo=${speedFactor}`)
-            .outputOptions([
+        ffmpeg.ffprobe(inputPath, (err, metadata) => {
+            if (err) {
+                console.error("❌ Error probing video:", err);
+                return reject(err);
+            }
+
+            // 1. Check if the video has an audio stream
+            const hasAudio = metadata.streams.some(stream => stream.codec_type === 'audio');
+            console.log(`⏱️ Audio track detected: ${hasAudio}. Changing speed to ${speedFactor}x...`);
+
+            const videoPts = 1 / speedFactor;
+            
+            // 2. Build the ffmpeg command with appropriate filters based on whether audio is present
+            let command = ffmpeg(inputPath).videoFilters(`setpts=${videoPts}*PTS`);
+
+            // 3. Add audio filter only if the video has an audio stream
+            if (hasAudio) {
+                command = command.audioFilters(`atempo=${speedFactor}`);
+            }
+
+            // 4. Resulting output options for both cases (with or without audio)
+            command.outputOptions([
                 '-c:v libx264',
-                '-preset fast',
-                '-crf 18'
+                '-crf 23',
+                '-pix_fmt yuv420p' // Support for a wide range of players
             ])
             .output(outputPath)
             .on('end', () => {
@@ -194,6 +181,8 @@ export const changeSpeed = (inputPath: string, outputPath: string, speedFactor: 
                 reject(err);
             })
             .run();
+        });
+        
     });
 };
 
@@ -202,15 +191,13 @@ export const trimVideo = (inputPath: string, outputPath: string, startTime: numb
         console.log(`✂️ Trimming video: starting at ${startTime}s for ${duration}s...`);
 
         ffmpeg(inputPath)
-            // Change the start time of the video
             .setStartTime(startTime)
-            // Change the duration of the video
             .setDuration(duration)
             .outputOptions([
                 '-c:v libx264',
-                '-preset fast',
-                '-crf 18',
-                '-c:a aac'
+                '-crf 23',
+                '-c:a aac',
+                '-pix_fmt yuv420p' // Support for a wide range of players
             ])
             .output(outputPath)
             .on('end', () => {
@@ -221,6 +208,72 @@ export const trimVideo = (inputPath: string, outputPath: string, startTime: numb
                 console.error(`❌ Error trimming video:`, err.message);
                 reject(err);
             })
+            .run();
+    });
+};
+
+export const singlePassEdit = (inputPath: string, outputPath: string, actions: string[], 
+    params: { speedFactor: number, trimStart: number, trimDuration: number }
+): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        console.log(`🚀 Starting Single-Pass Edit for: ${actions.join(', ')}`);
+
+        let command = ffmpeg(inputPath);
+        let videoFilters: string[] = [];
+        let audioFilters: string[] = [];
+        let removeAudio = actions.includes('remove-audio');
+
+        // 1. Add trim filter if requested
+        if (actions.includes('trim')) {
+            videoFilters.push(`trim=start=${params.trimStart}:duration=${params.trimDuration},setpts=PTS-STARTPTS`);
+            if (!removeAudio) {
+                audioFilters.push(`atrim=start=${params.trimStart}:duration=${params.trimDuration},asetpts=PTS-STARTPTS`);
+            }
+        }
+
+        // 2. Add speed change filter if requested
+        if (actions.includes('speed')) {
+            videoFilters.push(`setpts=${1/params.speedFactor}*PTS`);
+            if (!removeAudio) {
+                audioFilters.push(`atempo=${params.speedFactor}`);
+            }
+        }
+
+        // 3. Add reverse filter if requested
+        if (actions.includes('reverse')) {
+            videoFilters.push('reverse');
+            if (!removeAudio) {
+                audioFilters.push('areverse');
+            }
+        }
+
+        // Build the filter string
+        if (videoFilters.length > 0) command.videoFilters(videoFilters.join(','));
+        
+        if (removeAudio) {
+            command.noAudio();
+        } else if (audioFilters.length > 0) {
+            command.audioFilters(audioFilters.join(','));
+        }
+
+        command.outputOptions([
+            '-c:v libx264',
+            '-preset veryfast',
+            '-crf 23',
+            '-pix_fmt yuv420p',
+            '-movflags +faststart' // Optimized for fast streaming over the internet
+        ]);
+
+        if (!removeAudio) {
+            command.outputOptions(['-c:a aac', '-b:a 192k', '-ar 48000']);
+        }
+
+        command.output(outputPath)
+            .on('end', () => {
+                console.log('✅ Single-Pass Edit completed!');
+                resolve(outputPath);
+            })
+            .on('error', (err: Error) => reject(err))
             .run();
     });
 };
