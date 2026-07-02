@@ -6,11 +6,11 @@ import fs from 'fs';
 import cors from 'cors';
 import { EventEmitter } from 'events';
 
-import { createBoomerang, removeAudio, reverseVideo, concatVideos, improveQuality, changeSpeed, trimVideo, singlePassEdit } from './services/videoEditor';
+import { createBoomerang, concatVideos, singlePassEdit } from './services/videoEditor';
 
 const app = express();
 
-const allowedOrigins = ['http://localhost:5173', 'https://media-editing.vercel.app/'];
+const allowedOrigins = ['http://localhost:5173', 'https://media-editing.vercel.app'];
 
 app.use(cors({
   origin: function (origin, callback) {
@@ -21,17 +21,6 @@ app.use(cors({
     }
   }
 }));
-
-// Action translation for progress messages
-const actionNames: Record<string, string> = {
-    'boomerang': 'Creating Boomerang 🔄',
-    'reverse': 'Reversing Video ⏪',
-    'remove-audio': 'Removing Audio 🔇',
-    'improve': 'Improving Quality ✨',
-    'speed': 'Changing Speed ⏱️',
-    'trim': 'Trimming Video ✂️',
-    'concat': 'Concatenating Videos 🔗'
-};
 
 const PORT = process.env.PORT || 3003;
 

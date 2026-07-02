@@ -249,7 +249,7 @@ function App() {
         // If it's too large for the server but fits within the local browser limit
         if (fileSize <= localLimitBytes) {
           console.log("Routing to local WASM processing...");
-          await processLocally(actions[0]);
+          await processLocally(strictestAction);
           return; 
         } else {
           // Too large for both the server and the browser
